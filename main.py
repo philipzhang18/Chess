@@ -5,7 +5,9 @@
 import sys
 from game_manager import GameManager
 from chess_ai import ChessAI
+from chess_ai_gpu import ChessAIGPU
 from ui.pygame_ui import PygameUI
+from ai_self_play import AISelfPlay
 
 
 def main():
@@ -35,6 +37,7 @@ def main():
     # AI配置
     ai_player = None
     ai_depth = 6  # 默认搜索深度
+    use_gpu = False  # 默认不使用GPU
 
     if mode in ['1', '2', '4']:
         print()
@@ -62,17 +65,40 @@ def main():
         else:
             ai_depth = 6
 
+        # GPU加速选项
+        print()
+        print("是否使用GPU加速？")
+        print("1. 是（需要安装CuPy和CUDA）")
+        print("2. 否（使用CPU）")
+        print()
+
+        try:
+            use_gpu_choice = input("请输入选项 (1-2，默认2): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n程序退出")
+            sys.exit(0)
+
+        use_gpu = (use_gpu_choice == '1')
+
     # 根据模式创建AI
     if mode == '1':
         # 玩家执白，AI执黑
-        ai_player = ChessAI(game_manager.board, color='black', max_depth=ai_depth)
-        print(f"\n游戏开始! 玩家执白，AI执黑（搜索深度: {ai_depth}层）")
+        if use_gpu:
+            ai_player = ChessAIGPU(game_manager.board, color='black', max_depth=ai_depth, use_gpu=True)
+            print(f"\n游戏开始! 玩家执白，AI执黑（GPU加速，搜索深度: {ai_depth}层）")
+        else:
+            ai_player = ChessAI(game_manager.board, color='black', max_depth=ai_depth)
+            print(f"\n游戏开始! 玩家执白，AI执黑（CPU模式，搜索深度: {ai_depth}层）")
         print("使用鼠标点击棋子进行移动")
 
     elif mode == '2':
         # 玩家执黑，AI执白
-        ai_player = ChessAI(game_manager.board, color='white', max_depth=ai_depth)
-        print(f"\n游戏开始! AI执白，玩家执黑（搜索深度: {ai_depth}层）")
+        if use_gpu:
+            ai_player = ChessAIGPU(game_manager.board, color='white', max_depth=ai_depth, use_gpu=True)
+            print(f"\n游戏开始! AI执白，玩家执黑（GPU加速，搜索深度: {ai_depth}层）")
+        else:
+            ai_player = ChessAI(game_manager.board, color='white', max_depth=ai_depth)
+            print(f"\n游戏开始! AI执白，玩家执黑（CPU模式，搜索深度: {ai_depth}层）")
         print("使用鼠标点击棋子进行移动")
 
     elif mode == '3':
@@ -82,14 +108,33 @@ def main():
 
     elif mode == '4':
         # AI自对弈
-        # 注意：这个模式下需要修改UI逻辑来支持双AI
-        print("\n此模式尚未完全实现")
-        print("将使用单AI模式（玩家执白）")
-        ai_player = ChessAI(game_manager.board, color='black', max_depth=ai_depth)
+        gpu_mode_text = "GPU加速" if use_gpu else "CPU模式"
+        print(f"\n开始AI自对弈（{gpu_mode_text}，双方搜索深度: {ai_depth}层）")
+        print("正在运行，请稍候...")
+        print()
+
+        # 创建自对弈实例
+        self_play = AISelfPlay(
+            white_depth=ai_depth,
+            black_depth=ai_depth,
+            display_board=True,
+            delay=0.5,
+            use_gpu=use_gpu
+        )
+
+        # 开始对弈
+        result = self_play.play_game()
+
+        # 游戏结束，直接退出
+        print("\n感谢观看！")
+        sys.exit(0)
 
     else:
         print("无效选项，使用默认模式（玩家执白，AI执黑）")
-        ai_player = ChessAI(game_manager.board, color='black', max_depth=ai_depth)
+        if use_gpu:
+            ai_player = ChessAIGPU(game_manager.board, color='black', max_depth=ai_depth, use_gpu=True)
+        else:
+            ai_player = ChessAI(game_manager.board, color='black', max_depth=ai_depth)
 
     print("\n正在启动Pygame界面...")
     print()

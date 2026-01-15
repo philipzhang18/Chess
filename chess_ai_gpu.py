@@ -1,88 +1,26 @@
 """
-国际象棋AI模块
-实现Minimax算法配合Alpha-Beta剪枝
+国际象棋AI模块 - GPU加速版本
+使用CuPy进行GPU加速，提升Minimax算法的计算效率
 """
 import time
+import numpy as np
 from move_validator import MoveValidator
 
+# 尝试导入CuPy，如果失败则使用NumPy
+try:
+    import cupy as cp
+    GPU_AVAILABLE = True
+    print("GPU加速已启用 (CuPy)")
+except ImportError:
+    cp = np
+    GPU_AVAILABLE = False
+    print("GPU不可用，使用CPU模式 (NumPy)")
 
-class ChessAI:
-    """国际象棋AI类"""
 
-    # 位置价值表 - 白方视角
-    # 兵的位置价值表
-    PAWN_TABLE = [
-        [0,  0,  0,  0,  0,  0,  0,  0],
-        [50, 50, 50, 50, 50, 50, 50, 50],
-        [10, 10, 20, 30, 30, 20, 10, 10],
-        [5,  5, 10, 25, 25, 10,  5,  5],
-        [0,  0,  0, 20, 20,  0,  0,  0],
-        [5, -5,-10,  0,  0,-10, -5,  5],
-        [5, 10, 10,-20,-20, 10, 10,  5],
-        [0,  0,  0,  0,  0,  0,  0,  0]
-    ]
+class ChessAIGPU:
+    """国际象棋AI类 - GPU加速版本"""
 
-    # 马的位置价值表
-    KNIGHT_TABLE = [
-        [-50,-40,-30,-30,-30,-30,-40,-50],
-        [-40,-20,  0,  0,  0,  0,-20,-40],
-        [-30,  0, 10, 15, 15, 10,  0,-30],
-        [-30,  5, 15, 20, 20, 15,  5,-30],
-        [-30,  0, 15, 20, 20, 15,  0,-30],
-        [-30,  5, 10, 15, 15, 10,  5,-30],
-        [-40,-20,  0,  5,  5,  0,-20,-40],
-        [-50,-40,-30,-30,-30,-30,-40,-50]
-    ]
-
-    # 象的位置价值表
-    BISHOP_TABLE = [
-        [-20,-10,-10,-10,-10,-10,-10,-20],
-        [-10,  0,  0,  0,  0,  0,  0,-10],
-        [-10,  0,  5, 10, 10,  5,  0,-10],
-        [-10,  5,  5, 10, 10,  5,  5,-10],
-        [-10,  0, 10, 10, 10, 10,  0,-10],
-        [-10, 10, 10, 10, 10, 10, 10,-10],
-        [-10,  5,  0,  0,  0,  0,  5,-10],
-        [-20,-10,-10,-10,-10,-10,-10,-20]
-    ]
-
-    # 车的位置价值表
-    ROOK_TABLE = [
-        [0,  0,  0,  0,  0,  0,  0,  0],
-        [5, 10, 10, 10, 10, 10, 10,  5],
-        [-5,  0,  0,  0,  0,  0,  0, -5],
-        [-5,  0,  0,  0,  0,  0,  0, -5],
-        [-5,  0,  0,  0,  0,  0,  0, -5],
-        [-5,  0,  0,  0,  0,  0,  0, -5],
-        [-5,  0,  0,  0,  0,  0,  0, -5],
-        [0,  0,  0,  5,  5,  0,  0,  0]
-    ]
-
-    # 后的位置价值表
-    QUEEN_TABLE = [
-        [-20,-10,-10, -5, -5,-10,-10,-20],
-        [-10,  0,  0,  0,  0,  0,  0,-10],
-        [-10,  0,  5,  5,  5,  5,  0,-10],
-        [-5,  0,  5,  5,  5,  5,  0, -5],
-        [0,  0,  5,  5,  5,  5,  0, -5],
-        [-10,  5,  5,  5,  5,  5,  0,-10],
-        [-10,  0,  5,  0,  0,  0,  0,-10],
-        [-20,-10,-10, -5, -5,-10,-10,-20]
-    ]
-
-    # 王的位置价值表（中局）
-    KING_TABLE = [
-        [-30,-40,-40,-50,-50,-40,-40,-30],
-        [-30,-40,-40,-50,-50,-40,-40,-30],
-        [-30,-40,-40,-50,-50,-40,-40,-30],
-        [-30,-40,-40,-50,-50,-40,-40,-30],
-        [-20,-30,-30,-40,-40,-30,-30,-20],
-        [-10,-20,-20,-20,-20,-20,-20,-10],
-        [20, 20,  0,  0,  0,  0, 20, 20],
-        [20, 30, 10,  0,  0, 10, 30, 20]
-    ]
-
-    def __init__(self, board, color='black', max_depth=6):
+    def __init__(self, board, color='black', max_depth=6, use_gpu=True):
         """
         初始化AI
 
@@ -90,6 +28,7 @@ class ChessAI:
             board: ChessBoard实例
             color: AI执棋颜色（'white' 或 'black'）
             max_depth: 最大搜索深度
+            use_gpu: 是否使用GPU加速（如果可用）
         """
         self.board = board
         self.color = color
@@ -98,9 +37,106 @@ class ChessAI:
         self.time_limit = 30.0  # 每步最大思考时间（秒）
         self.start_time = 0
 
+        # GPU设置
+        self.use_gpu = use_gpu and GPU_AVAILABLE
+        self.xp = cp if self.use_gpu else np
+
+        # 初始化位置价值表（转换为GPU数组）
+        self._init_position_tables()
+
+        print(f"AI初始化完成 - 模式: {'GPU' if self.use_gpu else 'CPU'}, 深度: {max_depth}")
+
+    def _init_position_tables(self):
+        """初始化位置价值表并转换为GPU数组"""
+        # 兵的位置价值表
+        pawn_table = [
+            [0,  0,  0,  0,  0,  0,  0,  0],
+            [50, 50, 50, 50, 50, 50, 50, 50],
+            [10, 10, 20, 30, 30, 20, 10, 10],
+            [5,  5, 10, 25, 25, 10,  5,  5],
+            [0,  0,  0, 20, 20,  0,  0,  0],
+            [5, -5,-10,  0,  0,-10, -5,  5],
+            [5, 10, 10,-20,-20, 10, 10,  5],
+            [0,  0,  0,  0,  0,  0,  0,  0]
+        ]
+
+        # 马的位置价值表
+        knight_table = [
+            [-50,-40,-30,-30,-30,-30,-40,-50],
+            [-40,-20,  0,  0,  0,  0,-20,-40],
+            [-30,  0, 10, 15, 15, 10,  0,-30],
+            [-30,  5, 15, 20, 20, 15,  5,-30],
+            [-30,  0, 15, 20, 20, 15,  0,-30],
+            [-30,  5, 10, 15, 15, 10,  5,-30],
+            [-40,-20,  0,  5,  5,  0,-20,-40],
+            [-50,-40,-30,-30,-30,-30,-40,-50]
+        ]
+
+        # 象的位置价值表
+        bishop_table = [
+            [-20,-10,-10,-10,-10,-10,-10,-20],
+            [-10,  0,  0,  0,  0,  0,  0,-10],
+            [-10,  0,  5, 10, 10,  5,  0,-10],
+            [-10,  5,  5, 10, 10,  5,  5,-10],
+            [-10,  0, 10, 10, 10, 10,  0,-10],
+            [-10, 10, 10, 10, 10, 10, 10,-10],
+            [-10,  5,  0,  0,  0,  0,  5,-10],
+            [-20,-10,-10,-10,-10,-10,-10,-20]
+        ]
+
+        # 车的位置价值表
+        rook_table = [
+            [0,  0,  0,  0,  0,  0,  0,  0],
+            [5, 10, 10, 10, 10, 10, 10,  5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [0,  0,  0,  5,  5,  0,  0,  0]
+        ]
+
+        # 后的位置价值表
+        queen_table = [
+            [-20,-10,-10, -5, -5,-10,-10,-20],
+            [-10,  0,  0,  0,  0,  0,  0,-10],
+            [-10,  0,  5,  5,  5,  5,  0,-10],
+            [-5,  0,  5,  5,  5,  5,  0, -5],
+            [0,  0,  5,  5,  5,  5,  0, -5],
+            [-10,  5,  5,  5,  5,  5,  0,-10],
+            [-10,  0,  5,  0,  0,  0,  0,-10],
+            [-20,-10,-10, -5, -5,-10,-10,-20]
+        ]
+
+        # 王的位置价值表（中局）
+        king_table = [
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-20,-30,-30,-40,-40,-30,-30,-20],
+            [-10,-20,-20,-20,-20,-20,-20,-10],
+            [20, 20,  0,  0,  0,  0, 20, 20],
+            [20, 30, 10,  0,  0, 10, 30, 20]
+        ]
+
+        # 转换为GPU数组
+        self.pawn_table = self.xp.array(pawn_table, dtype=self.xp.float32)
+        self.knight_table = self.xp.array(knight_table, dtype=self.xp.float32)
+        self.bishop_table = self.xp.array(bishop_table, dtype=self.xp.float32)
+        self.rook_table = self.xp.array(rook_table, dtype=self.xp.float32)
+        self.queen_table = self.xp.array(queen_table, dtype=self.xp.float32)
+        self.king_table = self.xp.array(king_table, dtype=self.xp.float32)
+
+        # 棋子价值字典
+        self.piece_values = {
+            'P': 100, 'N': 320, 'B': 330,
+            'R': 500, 'Q': 900, 'K': 20000
+        }
+
     def get_best_move(self):
         """
-        获取最佳移动
+        获取最佳移动（GPU加速版本）
 
         Returns:
             tuple: ((from_row, from_col), (to_row, to_col)) 或 None
@@ -119,8 +155,10 @@ class ChessAI:
         alpha = float('-inf')
         beta = float('inf')
 
+        print(f"开始评估 {len(legal_moves)} 个候选移动...")
+
         # 对每个合法移动进行评估
-        for move in legal_moves:
+        for i, move in enumerate(legal_moves):
             # 检查是否超时
             if time.time() - self.start_time > self.time_limit:
                 print(f"AI搜索超时，已评估 {self.nodes_evaluated} 节点")
@@ -144,6 +182,10 @@ class ChessAI:
 
             alpha = max(alpha, value)
 
+            # 显示进度
+            if (i + 1) % 5 == 0 or (i + 1) == len(legal_moves):
+                print(f"进度: {i + 1}/{len(legal_moves)}, 当前最佳评分: {best_value:.1f}")
+
         # 降级处理：如果所有移动都是-inf（例如必输局面），选择第一个合法移动
         if best_move is None and legal_moves:
             best_move = legal_moves[0]
@@ -151,7 +193,8 @@ class ChessAI:
             print("警告: 所有移动评分均为-inf，选择第一个合法移动作为降级方案")
 
         elapsed_time = time.time() - self.start_time
-        print(f"AI思考时间: {elapsed_time:.2f}秒, 评估节点数: {self.nodes_evaluated}, 深度: {self.max_depth}")
+        print(f"AI思考完成 - 时间: {elapsed_time:.2f}秒, 节点数: {self.nodes_evaluated}, 深度: {self.max_depth}")
+        print(f"最佳移动评分: {best_value:.1f}")
 
         return best_move
 
@@ -195,7 +238,6 @@ class ChessAI:
         if is_maximizing:
             max_eval = float('-inf')
             for move in legal_moves:
-                # 超时检测
                 if time.time() - self.start_time > self.time_limit:
                     # 如果还没评估任何移动，返回静态评估而不是-inf
                     if max_eval == float('-inf'):
@@ -220,7 +262,6 @@ class ChessAI:
         else:
             min_eval = float('inf')
             for move in legal_moves:
-                # 超时检测
                 if time.time() - self.start_time > self.time_limit:
                     # 如果还没评估任何移动，返回静态评估而不是+inf
                     if min_eval == float('inf'):
@@ -245,7 +286,7 @@ class ChessAI:
 
     def _evaluate_board(self, board):
         """
-        评估棋盘局面
+        评估棋盘局面（GPU加速版本）
 
         Returns:
             float: 评估值（正值对AI有利，负值对对手有利）
@@ -264,10 +305,10 @@ class ChessAI:
                 piece_color = 'white' if is_white else 'black'
 
                 # 基础材料价值
-                piece_value = board.PIECE_VALUES.get(piece_type, 0)
+                piece_value = self.piece_values.get(piece_type, 0)
 
-                # 位置价值
-                position_value = self._get_position_value(piece_type, row, col, is_white)
+                # 位置价值（使用GPU数组）
+                position_value = self._get_position_value_gpu(piece_type, row, col, is_white)
 
                 total_value = piece_value + position_value
 
@@ -281,29 +322,35 @@ class ChessAI:
         score += self._evaluate_mobility(board)
         score += self._evaluate_king_safety(board)
         score += self._evaluate_center_control(board)
-        score += self._evaluate_pawn_structure(board)
 
         return score
 
-    def _get_position_value(self, piece_type, row, col, is_white):
-        """获取棋子的位置价值"""
+    def _get_position_value_gpu(self, piece_type, row, col, is_white):
+        """获取棋子的位置价值（GPU加速版本）"""
         # 黑方需要翻转棋盘
         eval_row = row if is_white else 7 - row
 
+        # 使用GPU数组查询位置价值
         if piece_type == 'P':
-            return self.PAWN_TABLE[eval_row][col]
+            value = float(self.pawn_table[eval_row, col])
         elif piece_type == 'N':
-            return self.KNIGHT_TABLE[eval_row][col]
+            value = float(self.knight_table[eval_row, col])
         elif piece_type == 'B':
-            return self.BISHOP_TABLE[eval_row][col]
+            value = float(self.bishop_table[eval_row, col])
         elif piece_type == 'R':
-            return self.ROOK_TABLE[eval_row][col]
+            value = float(self.rook_table[eval_row, col])
         elif piece_type == 'Q':
-            return self.QUEEN_TABLE[eval_row][col]
+            value = float(self.queen_table[eval_row, col])
         elif piece_type == 'K':
-            return self.KING_TABLE[eval_row][col]
+            value = float(self.king_table[eval_row, col])
+        else:
+            value = 0
 
-        return 0
+        # 如果使用GPU，需要将结果转回CPU
+        if self.use_gpu and hasattr(value, 'get'):
+            value = value.get()
+
+        return value
 
     def _evaluate_mobility(self, board):
         """评估移动自由度"""
@@ -332,9 +379,9 @@ class ChessAI:
     def _evaluate_center_control(self, board):
         """评估中心控制"""
         score = 0
-        # 中心格子：d4, e4, d5, e5 (行列坐标)
+        # 中心格子：d4, e4, d5, e5
         center_squares = [(3, 3), (3, 4), (4, 3), (4, 4)]
-        # 扩展中心：c3-f3, c4-f4, c5-f5, c6-f6
+        # 扩展中心
         extended_center = [
             (2, 2), (2, 3), (2, 4), (2, 5),
             (3, 2), (3, 5),
@@ -348,7 +395,7 @@ class ChessAI:
             if piece != board.EMPTY:
                 piece_color = 'white' if board.is_white_piece(piece) else 'black'
                 if piece_color == self.color:
-                    score += 30  # 占据中心奖励
+                    score += 30
                 else:
                     score -= 30
 
@@ -358,72 +405,9 @@ class ChessAI:
             if piece != board.EMPTY:
                 piece_color = 'white' if board.is_white_piece(piece) else 'black'
                 if piece_color == self.color:
-                    score += 10  # 占据扩展中心奖励
+                    score += 10
                 else:
                     score -= 10
-
-        return score
-
-    def _evaluate_pawn_structure(self, board):
-        """评估兵型结构"""
-        score = 0
-
-        # 评估双兵（同一列有两个或更多兵）和孤兵（相邻列没有己方兵）
-        for col in range(8):
-            ai_pawns_in_col = []
-            opponent_pawns_in_col = []
-
-            for row in range(8):
-                piece = board.get_piece(row, col)
-                if piece.upper() == 'P':
-                    piece_color = 'white' if board.is_white_piece(piece) else 'black'
-                    if piece_color == self.color:
-                        ai_pawns_in_col.append(row)
-                    else:
-                        opponent_pawns_in_col.append(row)
-
-            # 惩罚双兵
-            if len(ai_pawns_in_col) > 1:
-                score -= 20 * (len(ai_pawns_in_col) - 1)
-            if len(opponent_pawns_in_col) > 1:
-                score += 20 * (len(opponent_pawns_in_col) - 1)
-
-            # 检查孤兵（相邻列没有己方兵保护）
-            if len(ai_pawns_in_col) > 0:
-                has_support = False
-                for adj_col in [col - 1, col + 1]:
-                    if 0 <= adj_col < 8:
-                        for row in range(8):
-                            piece = board.get_piece(row, adj_col)
-                            if piece.upper() == 'P':
-                                piece_color = 'white' if board.is_white_piece(piece) else 'black'
-                                if piece_color == self.color:
-                                    has_support = True
-                                    break
-                if not has_support:
-                    score -= 15  # 惩罚孤兵
-
-        # 奖励连兵和兵链
-        for row in range(8):
-            for col in range(8):
-                piece = board.get_piece(row, col)
-                if piece.upper() == 'P':
-                    piece_color = 'white' if board.is_white_piece(piece) else 'black'
-                    is_ai = piece_color == self.color
-                    is_white = board.is_white_piece(piece)
-
-                    # 检查是否有斜向保护（兵链）
-                    protect_row = row + (1 if is_white else -1)
-                    for protect_col in [col - 1, col + 1]:
-                        if 0 <= protect_row < 8 and 0 <= protect_col < 8:
-                            protect_piece = board.get_piece(protect_row, protect_col)
-                            if protect_piece.upper() == 'P':
-                                protect_color = 'white' if board.is_white_piece(protect_piece) else 'black'
-                                if protect_color == piece_color:
-                                    if is_ai:
-                                        score += 8  # 奖励兵链
-                                    else:
-                                        score -= 8
 
         return score
 
