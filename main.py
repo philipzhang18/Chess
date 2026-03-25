@@ -5,9 +5,7 @@
 import sys
 from game_manager import GameManager
 from chess_ai import ChessAI
-from chess_ai_gpu import ChessAIGPU
 from ui.pygame_ui import PygameUI
-from ai_self_play import AISelfPlay
 
 
 def main():
@@ -23,10 +21,12 @@ def main():
     print("2. 人机对战（玩家执黑，AI执白）")
     print("3. 双人对战（本地）")
     print("4. AI自对弈（观看）")
+    print("5. Qwen大模型对战（玩家执白，Qwen AI执黑）")
+    print("6. Qwen大模型对战（玩家执黑，Qwen AI执白）")
     print()
 
     try:
-        mode = input("请输入选项 (1-4): ").strip()
+        mode = input("请输入选项 (1-6): ").strip()
     except (EOFError, KeyboardInterrupt):
         print("\n程序退出")
         sys.exit(0)
@@ -84,6 +84,7 @@ def main():
     if mode == '1':
         # 玩家执白，AI执黑
         if use_gpu:
+            from chess_ai_gpu import ChessAIGPU
             ai_player = ChessAIGPU(game_manager.board, color='black', max_depth=ai_depth, use_gpu=True)
             print(f"\n游戏开始! 玩家执白，AI执黑（GPU加速，搜索深度: {ai_depth}层）")
         else:
@@ -94,6 +95,7 @@ def main():
     elif mode == '2':
         # 玩家执黑，AI执白
         if use_gpu:
+            from chess_ai_gpu import ChessAIGPU
             ai_player = ChessAIGPU(game_manager.board, color='white', max_depth=ai_depth, use_gpu=True)
             print(f"\n游戏开始! AI执白，玩家执黑（GPU加速，搜索深度: {ai_depth}层）")
         else:
@@ -114,6 +116,7 @@ def main():
         print()
 
         # 创建自对弈实例
+        from ai_self_play import AISelfPlay
         self_play = AISelfPlay(
             white_depth=ai_depth,
             black_depth=ai_depth,
@@ -129,12 +132,35 @@ def main():
         print("\n感谢观看！")
         sys.exit(0)
 
+    elif mode == '5':
+        # Qwen大模型对战 - 玩家执白
+        try:
+            from chess_ai_qwen import ChessAIQwen
+            ai_player = ChessAIQwen(game_manager.board, color='black', fallback_depth=4)
+            print(f"\n游戏开始! 玩家执白，Qwen AI执黑（模型: {ai_player.model}）")
+            print("Qwen会分析棋局给出走法，失败时自动回退到Minimax")
+        except ValueError as e:
+            print(f"\n错误: {e}")
+            print("将使用普通Minimax AI代替")
+            ai_player = ChessAI(game_manager.board, color='black', max_depth=4)
+        print("使用鼠标点击棋子进行移动")
+
+    elif mode == '6':
+        # Qwen大模型对战 - 玩家执黑
+        try:
+            from chess_ai_qwen import ChessAIQwen
+            ai_player = ChessAIQwen(game_manager.board, color='white', fallback_depth=4)
+            print(f"\n游戏开始! Qwen AI执白，玩家执黑（模型: {ai_player.model}）")
+            print("Qwen会分析棋局给出走法，失败时自动回退到Minimax")
+        except ValueError as e:
+            print(f"\n错误: {e}")
+            print("将使用普通Minimax AI代替")
+            ai_player = ChessAI(game_manager.board, color='white', max_depth=4)
+        print("使用鼠标点击棋子进行移动")
+
     else:
         print("无效选项，使用默认模式（玩家执白，AI执黑）")
-        if use_gpu:
-            ai_player = ChessAIGPU(game_manager.board, color='black', max_depth=ai_depth, use_gpu=True)
-        else:
-            ai_player = ChessAI(game_manager.board, color='black', max_depth=ai_depth)
+        ai_player = ChessAI(game_manager.board, color='black', max_depth=ai_depth)
 
     print("\n正在启动Pygame界面...")
     print()

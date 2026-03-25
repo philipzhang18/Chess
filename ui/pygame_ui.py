@@ -5,200 +5,175 @@ Pygame图形界面模块
 import pygame
 import sys
 import os
+import math
 
 
 class PygameUI:
     """Pygame图形界面类"""
 
-    # 颜色定义
-    WHITE = (240, 217, 181)
-    BLACK = (181, 136, 99)
-    HIGHLIGHT = (186, 202, 68)
-    CHECK_HIGHLIGHT = (255, 100, 100)
-    TEXT_COLOR = (50, 50, 50)
-    BUTTON_COLOR = (100, 150, 200)
-    BUTTON_HOVER = (120, 170, 220)
+    # 棋盘配色 - 典雅木质风格
+    LIGHT_SQUARE = (240, 217, 181)
+    DARK_SQUARE = (181, 136, 99)
+    BOARD_BORDER = (101, 67, 33)
+    BOARD_BORDER_INNER = (139, 90, 43)
 
-    # 棋子Unicode字符（用于支持Unicode的字体）
-    PIECE_SYMBOLS_UNICODE = {
-        'K': '♔', 'Q': '♕', 'R': '♖', 'B': '♗', 'N': '♘', 'P': '♙',
-        'k': '♚', 'q': '♛', 'r': '♜', 'b': '♝', 'n': '♞', 'p': '♟'
+    # 交互高亮色
+    SELECTED_COLOR = (246, 246, 105, 180)
+    LAST_MOVE_COLOR = (205, 210, 106, 100)
+    CHECK_COLOR = (235, 67, 52)
+
+    # 合法走法指示
+    MOVE_DOT_COLOR = (0, 0, 0, 60)
+    CAPTURE_RING_COLOR = (0, 0, 0, 60)
+
+    # UI配色
+    BG_COLOR = (48, 46, 43)
+    PANEL_COLOR = (39, 37, 34)
+    TEXT_PRIMARY = (220, 220, 220)
+    TEXT_SECONDARY = (160, 160, 160)
+    TEXT_ACCENT = (129, 182, 76)
+    TEXT_WARNING = (235, 97, 80)
+    BUTTON_BG = (80, 76, 72)
+    BUTTON_HOVER_BG = (100, 96, 92)
+
+    # 棋子Unicode字符
+    PIECE_SYMBOLS = {
+        'K': '\u2654', 'Q': '\u2655', 'R': '\u2656',
+        'B': '\u2657', 'N': '\u2658', 'P': '\u2659',
+        'k': '\u265A', 'q': '\u265B', 'r': '\u265C',
+        'b': '\u265D', 'n': '\u265E', 'p': '\u265F'
     }
 
-    # 棋子ASCII字符（备选方案）
-    PIECE_SYMBOLS_ASCII = {
-        'K': 'K', 'Q': 'Q', 'R': 'R', 'B': 'B', 'N': 'N', 'P': 'P',
-        'k': 'K', 'q': 'Q', 'r': 'R', 'b': 'B', 'n': 'N', 'p': 'P'
-    }
-
-    def __init__(self, game_manager, width=800, height=800):
-        """
-        初始化Pygame界面
-
-        Args:
-            game_manager: GameManager实例
-            width: 窗口宽度
-            height: 窗口高度
-        """
+    def __init__(self, game_manager, width=860, height=760):
+        """初始化Pygame界面"""
         pygame.init()
 
         self.game_manager = game_manager
         self.width = width
         self.height = height
-        self.board_size = min(width, height) - 100  # 留出空间显示信息
-        self.square_size = self.board_size // 8
+
+        # 棋盘尺寸与布局
+        self.square_size = 80
+        self.board_size = self.square_size * 8
+        self.coord_margin = 24
         self.board_offset_x = (width - self.board_size) // 2
-        self.board_offset_y = 50
+        self.board_offset_y = 68
 
         # 创建窗口
         self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption("国际象棋")
+        pygame.display.set_caption("\u265A Chess")
 
-        # 字体 - 尝试使用支持Unicode chess符号的字体
-        self.piece_font = self._load_chess_font(int(self.square_size * 0.7))
+        # 加载字体
+        self.piece_font = self._load_chess_font(int(self.square_size * 0.78))
+        self.piece_font_small = self._load_chess_font(int(self.square_size * 0.5))
+        self.info_font = self._load_chinese_font(26)
+        self.small_font = self._load_chinese_font(18)
+        self.coord_font = self._load_chinese_font(14)
+        self.title_font = self._load_chinese_font(36)
 
-        # 加载支持中文的字体
-        self.info_font = self._load_chinese_font(32)
-        self.small_font = self._load_chinese_font(24)
-
-        # 是否使用Unicode棋子符号
         self.use_unicode = self._test_unicode_support()
 
-        # 选中状态
-        self.selected_piece = None  # (row, col)
+        # 状态
+        self.selected_piece = None
         self.legal_moves = []
-
-        # AI思考状态
         self.ai_thinking = False
+        self.last_move = None  # 记录上一步走法用于高亮
+        self.think_anim_frame = 0
+
+        # 预渲染棋盘表面
+        self._board_surface = self._create_board_surface()
 
     def _load_chess_font(self, size):
-        """
-        加载支持国际象棋Unicode字符的字体
-
-        Args:
-            size: 字体大小
-
-        Returns:
-            pygame.font.Font: 字体对象
-        """
-        # 尝试加载支持Unicode chess符号的系统字体
-        font_names = [
-            'Segoe UI Symbol',  # Windows
-            'Arial Unicode MS',  # Windows/Mac
-            'DejaVu Sans',  # Linux
-            'Noto Sans Symbols',  # Linux
-            'Apple Symbols',  # Mac
-        ]
-
-        for font_name in font_names:
+        """加载棋子字体"""
+        font_names = ['Segoe UI Symbol', 'Arial Unicode MS', 'DejaVu Sans',
+                       'Noto Sans Symbols', 'Apple Symbols']
+        for name in font_names:
             try:
-                font = pygame.font.SysFont(font_name, size)
-                # 测试字体是否支持chess符号
-                test_surface = font.render('♔', True, (0, 0, 0))
-                if test_surface.get_width() > 0:
-                    print(f"使用棋子字体: {font_name}")
+                font = pygame.font.SysFont(name, size)
+                if font.render('\u2654', True, (0, 0, 0)).get_width() > 0:
                     return font
             except:
                 continue
-
-        # 如果都失败，使用默认字体（将使用ASCII显示）
-        print("未找到支持Unicode chess符号的字体，将使用ASCII字符显示棋子")
         return pygame.font.Font(None, size)
 
     def _load_chinese_font(self, size):
-        """
-        加载支持中文的字体
-
-        Args:
-            size: 字体大小
-
-        Returns:
-            pygame.font.Font: 字体对象
-        """
-        # 尝试加载支持中文的系统字体（使用英文和中文名称）
-        font_names = [
-            'microsoftyahei',       # 微软雅黑 - Windows (小写无空格)
-            'Microsoft YaHei',      # 微软雅黑 - Windows
-            'simhei',               # 黑体 - Windows
-            'SimHei',               # 黑体 - Windows
-            'simsun',               # 宋体 - Windows
-            'SimSun',               # 宋体 - Windows
-            'msgothic',             # MS Gothic - Windows
-            'Arial Unicode MS',     # Windows/Mac
-            'PingFang SC',          # 苹方 - Mac
-            'Noto Sans CJK SC',     # Linux
-            'WenQuanYi Micro Hei',  # 文泉驿微米黑 - Linux
-        ]
-
-        for font_name in font_names:
+        """加载中文字体"""
+        font_names = ['microsoftyahei', 'Microsoft YaHei', 'simhei', 'SimHei',
+                       'simsun', 'Arial Unicode MS', 'PingFang SC',
+                       'Noto Sans CJK SC', 'WenQuanYi Micro Hei']
+        for name in font_names:
             try:
-                font = pygame.font.SysFont(font_name, size)
-                # 测试字体是否支持中文
-                test_surface = font.render('测', True, (0, 0, 0))
-                if test_surface.get_width() > 10:
-                    print(f"使用中文字体: {font_name}")
+                font = pygame.font.SysFont(name, size)
+                if font.render('\u6d4b', True, (0, 0, 0)).get_width() > 10:
                     return font
-            except Exception as e:
+            except:
                 continue
-
-        # 尝试直接加载Windows常见字体文件
-        try:
-            import os
-            windows_font_paths = [
-                r'C:\Windows\Fonts\msyh.ttc',      # 微软雅黑
-                r'C:\Windows\Fonts\simhei.ttf',    # 黑体
-                r'C:\Windows\Fonts\simsun.ttc',    # 宋体
-                r'C:\Windows\Fonts\msgothic.ttc',  # MS Gothic
-            ]
-            for font_path in windows_font_paths:
-                if os.path.exists(font_path):
-                    try:
-                        font = pygame.font.Font(font_path, size)
-                        print(f"使用字体文件: {font_path}")
-                        return font
-                    except:
-                        continue
-        except:
-            pass
-
-        # 如果都失败，使用默认字体（中文可能显示为方框）
-        print("警告: 未找到支持中文的字体，界面文字可能显示为方框")
-        print("建议: 确保系统已安装微软雅黑或其他中文字体")
+        # 尝试Windows字体文件
+        for path in [r'C:\Windows\Fonts\msyh.ttc', r'C:\Windows\Fonts\simhei.ttf']:
+            if os.path.exists(path):
+                try:
+                    return pygame.font.Font(path, size)
+                except:
+                    continue
         return pygame.font.Font(None, size)
 
     def _test_unicode_support(self):
-        """
-        测试当前字体是否支持Unicode chess符号
-
-        Returns:
-            bool: 是否支持
-        """
+        """测试Unicode棋子符号支持"""
         try:
-            test_surface = self.piece_font.render('♔', True, (0, 0, 0))
-            # 如果渲染的宽度太小，说明不支持
-            return test_surface.get_width() > 5
+            return self.piece_font.render('\u2654', True, (0, 0, 0)).get_width() > 5
         except:
             return False
 
-    def run(self, ai_player=None):
-        """
-        运行游戏主循环
+    def _create_board_surface(self):
+        """预渲染静态棋盘（含坐标标记）"""
+        total = self.board_size + self.coord_margin * 2
+        surface = pygame.Surface((total, total))
+        surface.fill(self.BOARD_BORDER)
 
-        Args:
-            ai_player: ChessAI实例，如果不为None则启用AI对手
-        """
+        # 内边框
+        pygame.draw.rect(surface, self.BOARD_BORDER_INNER,
+                         (2, 2, total - 4, total - 4))
+
+        # 棋盘格子
+        for row in range(8):
+            for col in range(8):
+                color = self.LIGHT_SQUARE if (row + col) % 2 == 0 else self.DARK_SQUARE
+                x = self.coord_margin + col * self.square_size
+                y = self.coord_margin + row * self.square_size
+                pygame.draw.rect(surface, color, (x, y, self.square_size, self.square_size))
+
+        # 坐标标记 - 嵌入棋盘格角落
+        for i in range(8):
+            # 列标记 a-h（底部）
+            label = self.coord_font.render(chr(ord('a') + i), True,
+                                           self.DARK_SQUARE if i % 2 == 1 else self.LIGHT_SQUARE)
+            x = self.coord_margin + i * self.square_size + self.square_size - label.get_width() - 3
+            y = self.coord_margin + 7 * self.square_size + self.square_size - label.get_height() - 1
+            surface.blit(label, (x, y))
+
+            # 行标记 8-1（左侧）
+            label = self.coord_font.render(str(8 - i), True,
+                                           self.LIGHT_SQUARE if i % 2 == 1 else self.DARK_SQUARE)
+            x = self.coord_margin + 3
+            y = self.coord_margin + i * self.square_size + 2
+            surface.blit(label, (x, y))
+
+        return surface
+
+    def run(self, ai_player=None):
+        """运行游戏主循环"""
         clock = pygame.time.Clock()
         running = True
 
         while running:
-            # 处理事件
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and not self.ai_thinking:
-                    self._handle_mouse_click(event.pos)
+                    if not self.game_manager.game_over:
+                        self._handle_mouse_click(event.pos)
 
-            # 如果轮到AI移动
+            # AI移动
             if (ai_player and
                 not self.game_manager.game_over and
                 self.game_manager.board.current_turn == ai_player.color and
@@ -207,20 +182,16 @@ class PygameUI:
                 self._draw()
                 pygame.display.flip()
 
-                # AI计算最佳移动
                 best_move = ai_player.get_best_move()
                 if best_move:
                     from_pos, to_pos = best_move
-                    from_row, from_col = from_pos
-                    to_row, to_col = to_pos
-                    self.game_manager.make_move(from_row, from_col, to_row, to_col)
-
+                    self.last_move = (from_pos, to_pos)
+                    self.game_manager.make_move(from_pos[0], from_pos[1],
+                                                to_pos[0], to_pos[1])
                 self.ai_thinking = False
 
-            # 绘制界面
+            self.think_anim_frame += 1
             self._draw()
-
-            # 更新显示
             pygame.display.flip()
             clock.tick(30)
 
@@ -229,121 +200,99 @@ class PygameUI:
 
     def _handle_mouse_click(self, pos):
         """处理鼠标点击事件"""
-        x, y = pos
+        # 计算相对于棋盘的坐标（考虑坐标边距）
+        bx = self.board_offset_x - self.coord_margin
+        by = self.board_offset_y - self.coord_margin
+        rel_x = pos[0] - bx - self.coord_margin
+        rel_y = pos[1] - by - self.coord_margin
 
-        # 转换为棋盘坐标
-        col = (x - self.board_offset_x) // self.square_size
-        row = (y - self.board_offset_y) // self.square_size
+        col = rel_x // self.square_size
+        row = rel_y // self.square_size
 
-        # 检查是否点击在棋盘内
         if not (0 <= row < 8 and 0 <= col < 8):
             return
 
         piece = self.game_manager.board.get_piece(row, col)
 
-        # 如果已选中棋子，尝试移动
         if self.selected_piece:
             from_row, from_col = self.selected_piece
 
-            # 如果点击的是合法移动目标
             if (row, col) in self.legal_moves:
-                # 检查是否需要兵升变
                 moving_piece = self.game_manager.board.get_piece(from_row, from_col)
                 promotion_piece = None
 
                 if moving_piece.upper() == 'P':
                     is_white = self.game_manager.board.is_white_piece(moving_piece)
-                    promotion_row = 0 if is_white else 7
-                    if row == promotion_row:
-                        # 显示兵升变选择界面
+                    if row == (0 if is_white else 7):
                         promotion_piece = self._show_promotion_dialog(is_white)
 
-                # 执行移动
+                self.last_move = ((from_row, from_col), (row, col))
                 success = self.game_manager.make_move(from_row, from_col, row, col, promotion_piece)
-
                 if success:
                     self.selected_piece = None
                     self.legal_moves = []
-            # 如果点击的是己方其他棋子，重新选择
             elif (piece != self.game_manager.board.EMPTY and
                   self.game_manager.board.get_piece_color(piece) == self.game_manager.board.current_turn):
                 self.selected_piece = (row, col)
                 self.legal_moves = self.game_manager.get_legal_moves_for_piece(row, col)
             else:
-                # 取消选择
                 self.selected_piece = None
                 self.legal_moves = []
-
-        # 如果未选中棋子，选择当前位置的棋子
         elif (piece != self.game_manager.board.EMPTY and
               self.game_manager.board.get_piece_color(piece) == self.game_manager.board.current_turn):
             self.selected_piece = (row, col)
             self.legal_moves = self.game_manager.get_legal_moves_for_piece(row, col)
 
     def _show_promotion_dialog(self, is_white):
-        """
-        显示兵升变选择对话框
-
-        Args:
-            is_white: 是否为白方
-
-        Returns:
-            str: 选择的棋子类型（'Q', 'R', 'B', 'N'）
-        """
+        """显示兵升变选择对话框"""
         pieces = ['Q', 'R', 'B', 'N']
-        piece_names = ['后', '车', '象', '马']
+        piece_names = ['\u540e', '\u8f66', '\u8c61', '\u9a6c']
 
-        # 绘制对话框背景
-        dialog_width = 400
-        dialog_height = 150
-        dialog_x = (self.width - dialog_width) // 2
-        dialog_y = (self.height - dialog_height) // 2
-
-        overlay = pygame.Surface((self.width, self.height))
-        overlay.set_alpha(180)
-        overlay.fill((0, 0, 0))
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
         self.screen.blit(overlay, (0, 0))
 
-        pygame.draw.rect(self.screen, (255, 255, 255),
-                        (dialog_x, dialog_y, dialog_width, dialog_height))
-        pygame.draw.rect(self.screen, (0, 0, 0),
-                        (dialog_x, dialog_y, dialog_width, dialog_height), 3)
+        dialog_w, dialog_h = 380, 160
+        dx = (self.width - dialog_w) // 2
+        dy = (self.height - dialog_h) // 2
 
-        # 显示标题
-        title = self.info_font.render("选择升变棋子", True, self.TEXT_COLOR)
-        title_rect = title.get_rect(center=(self.width // 2, dialog_y + 30))
-        self.screen.blit(title, title_rect)
+        # 圆角对话框
+        dialog_surf = pygame.Surface((dialog_w, dialog_h), pygame.SRCALPHA)
+        pygame.draw.rect(dialog_surf, (50, 48, 45, 240), (0, 0, dialog_w, dialog_h),
+                         border_radius=12)
+        pygame.draw.rect(dialog_surf, (100, 96, 92), (0, 0, dialog_w, dialog_h),
+                         width=2, border_radius=12)
+        self.screen.blit(dialog_surf, (dx, dy))
 
-        # 显示棋子选项
-        button_width = 80
-        button_height = 60
-        button_y = dialog_y + 70
+        title = self.info_font.render("\u9009\u62e9\u5347\u53d8\u68cb\u5b50", True, self.TEXT_PRIMARY)
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, dy + 32)))
+
+        btn_size = 70
+        btn_y = dy + 70
+        gap = 12
+        total_w = 4 * btn_size + 3 * gap
+        start_x = (self.width - total_w) // 2
         buttons = []
 
-        for i, (piece, name) in enumerate(zip(pieces, piece_names)):
-            button_x = dialog_x + 20 + i * (button_width + 10)
-            buttons.append((button_x, button_y, button_width, button_height, piece))
+        for i, (p, name) in enumerate(zip(pieces, piece_names)):
+            bx = start_x + i * (btn_size + gap)
+            buttons.append((bx, btn_y, btn_size, btn_size, p))
 
-            pygame.draw.rect(self.screen, self.BUTTON_COLOR,
-                           (button_x, button_y, button_width, button_height))
-            pygame.draw.rect(self.screen, (0, 0, 0),
-                           (button_x, button_y, button_width, button_height), 2)
+            pygame.draw.rect(self.screen, self.BUTTON_BG,
+                             (bx, btn_y, btn_size, btn_size), border_radius=8)
+            pygame.draw.rect(self.screen, (120, 116, 112),
+                             (bx, btn_y, btn_size, btn_size), width=1, border_radius=8)
 
-            # 显示棋子符号和名称
             if self.use_unicode:
-                symbol = self.PIECE_SYMBOLS_UNICODE[piece if is_white else piece.lower()]
-                piece_text = self.piece_font.render(symbol, True, (0, 0, 0))
+                sym = self.PIECE_SYMBOLS[p if is_white else p.lower()]
+                color = (255, 255, 255) if is_white else (40, 40, 40)
+                txt = self.piece_font_small.render(sym, True, color)
             else:
-                # 使用ASCII字母 + 中文名称
-                symbol_text = self.PIECE_SYMBOLS_ASCII[piece]
-                piece_text = self.small_font.render(f"{symbol_text}-{name}", True, (0, 0, 0))
-
-            piece_rect = piece_text.get_rect(center=(button_x + button_width // 2, button_y + button_height // 2))
-            self.screen.blit(piece_text, piece_rect)
+                txt = self.info_font.render(name, True, self.TEXT_PRIMARY)
+            self.screen.blit(txt, txt.get_rect(center=(bx + btn_size // 2, btn_y + btn_size // 2)))
 
         pygame.display.flip()
 
-        # 等待用户选择
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -351,158 +300,277 @@ class PygameUI:
                     sys.exit()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     x, y = event.pos
-                    for bx, by, bw, bh, piece in buttons:
+                    for bx, by, bw, bh, p in buttons:
                         if bx <= x <= bx + bw and by <= y <= by + bh:
-                            return piece
+                            return p
 
     def _draw(self):
         """绘制整个界面"""
-        self.screen.fill((220, 220, 220))
+        self.screen.fill(self.BG_COLOR)
 
-        # 绘制棋盘
-        self._draw_board()
+        # 绘制顶部状态栏
+        self._draw_status_bar()
+
+        # 绘制棋盘底板（预渲染）
+        bx = self.board_offset_x - self.coord_margin
+        by = self.board_offset_y - self.coord_margin
+        self.screen.blit(self._board_surface, (bx, by))
+
+        # 绘制动态叠加层（高亮、指示器）
+        self._draw_highlights()
 
         # 绘制棋子
         self._draw_pieces()
 
-        # 绘制信息面板
-        self._draw_info_panel()
+        # 绘制底部信息栏
+        self._draw_bottom_bar()
 
-        # 如果游戏结束，显示结果
+        # 叠加层
         if self.game_manager.game_over:
             self._draw_game_over()
-
-        # 如果AI正在思考，显示提示
-        if self.ai_thinking:
+        elif self.ai_thinking:
             self._draw_ai_thinking()
 
-    def _draw_board(self):
-        """绘制棋盘"""
-        for row in range(8):
-            for col in range(8):
-                x = self.board_offset_x + col * self.square_size
-                y = self.board_offset_y + row * self.square_size
+    def _draw_status_bar(self):
+        """绘制顶部状态栏"""
+        bar_h = 52
+        pygame.draw.rect(self.screen, self.PANEL_COLOR, (0, 0, self.width, bar_h))
+        pygame.draw.line(self.screen, (60, 58, 55), (0, bar_h), (self.width, bar_h))
 
-                # 确定方格颜色
-                color = self.WHITE if (row + col) % 2 == 0 else self.BLACK
+        # 回合指示 - 带棋子颜色圆点
+        is_white_turn = self.game_manager.board.current_turn == 'white'
+        dot_color = (240, 240, 240) if is_white_turn else (40, 40, 40)
+        dot_x, dot_y = 24, bar_h // 2
+        pygame.draw.circle(self.screen, dot_color, (dot_x, dot_y), 10)
+        pygame.draw.circle(self.screen, (100, 100, 100), (dot_x, dot_y), 10, 1)
 
-                # 如果是选中的棋子，高亮显示
-                if self.selected_piece == (row, col):
-                    color = self.HIGHLIGHT
+        turn_text = "\u767d\u65b9\u8d70\u68cb" if is_white_turn else "\u9ed1\u65b9\u8d70\u68cb"
+        txt = self.info_font.render(turn_text, True, self.TEXT_PRIMARY)
+        self.screen.blit(txt, (dot_x + 18, (bar_h - txt.get_height()) // 2))
 
-                # 如果是合法移动目标，高亮显示
-                if (row, col) in self.legal_moves:
-                    color = self.HIGHLIGHT
+        # 将军警告
+        if self.game_manager.is_check():
+            check_txt = self.info_font.render("\u2620 \u5c06\u519b!", True, self.TEXT_WARNING)
+            self.screen.blit(check_txt, (self.width - check_txt.get_width() - 20,
+                                         (bar_h - check_txt.get_height()) // 2))
 
-                # 如果王被将军，红色高亮
-                if self.game_manager.is_check():
-                    king_pos = (self.game_manager.board.white_king_pos
-                               if self.game_manager.board.current_turn == 'white'
-                               else self.game_manager.board.black_king_pos)
-                    if (row, col) == king_pos:
-                        color = self.CHECK_HIGHLIGHT
+        # 步数
+        move_count = len(self.game_manager.board.move_history)
+        round_num = move_count // 2 + 1
+        count_txt = self.small_font.render(f"\u7b2c {round_num} \u56de\u5408", True, self.TEXT_SECONDARY)
+        cx = self.width // 2 - count_txt.get_width() // 2
+        self.screen.blit(count_txt, (cx, (bar_h - count_txt.get_height()) // 2))
 
-                pygame.draw.rect(self.screen, color,
-                               (x, y, self.square_size, self.square_size))
+    def _draw_highlights(self):
+        """绘制棋盘上的动态高亮层"""
+        ox = self.board_offset_x
+        oy = self.board_offset_y
+        sq = self.square_size
 
-        # 绘制坐标标记
-        for i in range(8):
-            # 列标记 (a-h)
-            label = self.small_font.render(chr(ord('a') + i), True, self.TEXT_COLOR)
-            x = self.board_offset_x + i * self.square_size + self.square_size // 2
-            y = self.board_offset_y + self.board_size + 5
-            label_rect = label.get_rect(center=(x, y))
-            self.screen.blit(label, label_rect)
+        # 上一步走法高亮
+        if self.last_move:
+            from_pos, to_pos = self.last_move
+            for (r, c) in [from_pos, to_pos]:
+                surf = pygame.Surface((sq, sq), pygame.SRCALPHA)
+                surf.fill(self.LAST_MOVE_COLOR)
+                self.screen.blit(surf, (ox + c * sq, oy + r * sq))
 
-            # 行标记 (1-8)
-            label = self.small_font.render(str(8 - i), True, self.TEXT_COLOR)
-            x = self.board_offset_x - 15
-            y = self.board_offset_y + i * self.square_size + self.square_size // 2
-            label_rect = label.get_rect(center=(x, y))
-            self.screen.blit(label, label_rect)
+        # 选中棋子高亮
+        if self.selected_piece:
+            r, c = self.selected_piece
+            surf = pygame.Surface((sq, sq), pygame.SRCALPHA)
+            surf.fill(self.SELECTED_COLOR)
+            self.screen.blit(surf, (ox + c * sq, oy + r * sq))
+
+        # 合法走法指示
+        for (r, c) in self.legal_moves:
+            cx = ox + c * sq + sq // 2
+            cy = oy + r * sq + sq // 2
+            target = self.game_manager.board.get_piece(r, c)
+
+            indicator = pygame.Surface((sq, sq), pygame.SRCALPHA)
+            if target != self.game_manager.board.EMPTY:
+                # 吃子 - 角落三角标记
+                tri_size = sq // 4
+                corners = [
+                    [(0, 0), (tri_size, 0), (0, tri_size)],
+                    [(sq, 0), (sq - tri_size, 0), (sq, tri_size)],
+                    [(0, sq), (tri_size, sq), (0, sq - tri_size)],
+                    [(sq, sq), (sq - tri_size, sq), (sq, sq - tri_size)],
+                ]
+                for tri in corners:
+                    pygame.draw.polygon(indicator, (0, 0, 0, 50), tri)
+            else:
+                # 空格 - 中心小圆点
+                pygame.draw.circle(indicator, self.MOVE_DOT_COLOR,
+                                   (sq // 2, sq // 2), sq // 7)
+            self.screen.blit(indicator, (ox + c * sq, oy + r * sq))
+
+        # 将军时王的位置红色高亮
+        if self.game_manager.is_check():
+            board = self.game_manager.board
+            king_pos = (board.white_king_pos if board.current_turn == 'white'
+                        else board.black_king_pos)
+            r, c = king_pos
+            # 径向渐变红色
+            surf = pygame.Surface((sq, sq), pygame.SRCALPHA)
+            center = sq // 2
+            for radius in range(sq // 2, 0, -1):
+                alpha = int(100 * (1 - radius / (sq // 2)))
+                pygame.draw.circle(surf, (self.CHECK_COLOR[0], self.CHECK_COLOR[1],
+                                          self.CHECK_COLOR[2], alpha),
+                                   (center, center), radius)
+            self.screen.blit(surf, (ox + c * sq, oy + r * sq))
 
     def _draw_pieces(self):
-        """绘制棋子"""
+        """绘制棋子（带描边增强辨识度）"""
+        ox = self.board_offset_x
+        oy = self.board_offset_y
+        sq = self.square_size
+
         for row in range(8):
             for col in range(8):
                 piece = self.game_manager.board.get_piece(row, col)
                 if piece == self.game_manager.board.EMPTY:
                     continue
 
-                x = self.board_offset_x + col * self.square_size + self.square_size // 2
-                y = self.board_offset_y + row * self.square_size + self.square_size // 2
+                cx = ox + col * sq + sq // 2
+                cy = oy + row * sq + sq // 2
 
-                # 根据字体支持选择符号集
-                if self.use_unicode:
-                    symbol = self.PIECE_SYMBOLS_UNICODE.get(piece, piece)
-                else:
-                    symbol = self.PIECE_SYMBOLS_ASCII.get(piece, piece)
+                if not self.use_unicode:
+                    # ASCII回退
+                    is_w = self.game_manager.board.is_white_piece(piece)
+                    color = (255, 220, 160) if is_w else (80, 40, 10)
+                    txt = self.piece_font.render(piece.upper(), True, color)
+                    self.screen.blit(txt, txt.get_rect(center=(cx, cy)))
+                    continue
 
-                # 棋子颜色
+                symbol = self.PIECE_SYMBOLS.get(piece, piece)
                 is_white = self.game_manager.board.is_white_piece(piece)
+
+                # 描边效果：先绘制偏移的深色文字作为阴影
+                outline_color = (40, 40, 40) if is_white else (200, 200, 200)
+                for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]:
+                    outline = self.piece_font.render(symbol, True, outline_color)
+                    self.screen.blit(outline, outline.get_rect(center=(cx + dx, cy + dy)))
+
+                # 主体颜色
+                main_color = (255, 255, 255) if is_white else (30, 30, 30)
+                main = self.piece_font.render(symbol, True, main_color)
+                self.screen.blit(main, main.get_rect(center=(cx, cy)))
+
+    def _draw_bottom_bar(self):
+        """绘制底部信息栏（被吃棋子展示）"""
+        bar_y = self.board_offset_y + self.board_size + self.coord_margin + 8
+        bar_h = self.height - bar_y
+        pygame.draw.rect(self.screen, self.PANEL_COLOR, (0, bar_y, self.width, bar_h))
+        pygame.draw.line(self.screen, (60, 58, 55), (0, bar_y), (self.width, bar_y))
+
+        captured = self.game_manager.board.captured_pieces
+        if not captured:
+            hint = self.small_font.render(
+                "\u9f20\u6807\u70b9\u51fb\u68cb\u5b50\u79fb\u52a8 | "
+                "\u9ad8\u4eae\u5706\u70b9\u4e3a\u53ef\u8d70\u4f4d\u7f6e",
+                True, self.TEXT_SECONDARY)
+            self.screen.blit(hint, (20, bar_y + (bar_h - hint.get_height()) // 2))
+            return
+
+        # 分组展示被吃棋子
+        white_captured = sorted([p for p in captured if self.game_manager.board.is_white_piece(p)],
+                                key=lambda p: -{'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9, 'K': 99}.get(p.upper(), 0))
+        black_captured = sorted([p for p in captured if self.game_manager.board.is_black_piece(p)],
+                                key=lambda p: -{'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9, 'K': 99}.get(p.upper(), 0))
+
+        x_start = 20
+        cy = bar_y + bar_h // 2
+
+        # 黑方吃的白子
+        if white_captured:
+            label = self.small_font.render("\u9ed1\u65b9\u5403:", True, self.TEXT_SECONDARY)
+            self.screen.blit(label, (x_start, cy - label.get_height() // 2))
+            px = x_start + label.get_width() + 4
+            for p in white_captured:
                 if self.use_unicode:
-                    # Unicode符号用黑白色区分
-                    color = (255, 255, 255) if is_white else (0, 0, 0)
+                    sym = self.PIECE_SYMBOLS.get(p, p)
+                    txt = self.piece_font_small.render(sym, True, (200, 200, 200))
                 else:
-                    # ASCII字符用颜色背景区分
-                    color = (255, 200, 100) if is_white else (100, 50, 20)
+                    txt = self.small_font.render(p, True, (200, 200, 200))
+                self.screen.blit(txt, (px, cy - txt.get_height() // 2))
+                px += txt.get_width() + 2
 
-                # 绘制棋子
-                text = self.piece_font.render(symbol, True, color)
-                text_rect = text.get_rect(center=(x, y))
-                self.screen.blit(text, text_rect)
-
-    def _draw_info_panel(self):
-        """绘制信息面板"""
-        # 当前回合
-        turn_text = f"当前回合: {'白方' if self.game_manager.board.current_turn == 'white' else '黑方'}"
-        text = self.info_font.render(turn_text, True, self.TEXT_COLOR)
-        self.screen.blit(text, (20, 10))
-
-        # 将军状态
-        if self.game_manager.is_check():
-            check_text = self.info_font.render("将军!", True, (255, 0, 0))
-            self.screen.blit(check_text, (self.width - 150, 10))
-
-        # 移动次数
-        move_count = len(self.game_manager.board.move_history)
-        count_text = self.small_font.render(f"移动次数: {move_count}", True, self.TEXT_COLOR)
-        self.screen.blit(count_text, (20, self.height - 30))
+        # 白方吃的黑子
+        if black_captured:
+            rx = self.width // 2 + 20
+            label = self.small_font.render("\u767d\u65b9\u5403:", True, self.TEXT_SECONDARY)
+            self.screen.blit(label, (rx, cy - label.get_height() // 2))
+            px = rx + label.get_width() + 4
+            for p in black_captured:
+                if self.use_unicode:
+                    sym = self.PIECE_SYMBOLS.get(p, p)
+                    txt = self.piece_font_small.render(sym, True, (60, 60, 60))
+                else:
+                    txt = self.small_font.render(p.upper(), True, (60, 60, 60))
+                self.screen.blit(txt, (px, cy - txt.get_height() // 2))
+                px += txt.get_width() + 2
 
     def _draw_game_over(self):
-        """绘制游戏结束界面"""
-        overlay = pygame.Surface((self.width, self.height))
-        overlay.set_alpha(200)
-        overlay.fill((0, 0, 0))
+        """绘制游戏结束覆盖层"""
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (0, 0))
 
-        # 显示结果
+        cy = self.height // 2
+
+        # 结果文字
         if self.game_manager.game_result == 'checkmate':
-            result_text = f"将死! {'白方' if self.game_manager.winner == 'white' else '黑方'}获胜!"
+            winner = '\u767d\u65b9' if self.game_manager.winner == 'white' else '\u9ed1\u65b9'
+            main_text = f"\u5c06\u6b7b! {winner}\u83b7\u80dc!"
+            main_color = self.TEXT_ACCENT
         elif self.game_manager.game_result == 'stalemate':
-            result_text = "僵局! 平局!"
+            main_text = "\u50f5\u5c40 - \u5e73\u5c40!"
+            main_color = self.TEXT_SECONDARY
         else:
-            result_text = "游戏结束"
+            main_text = "\u6e38\u620f\u7ed3\u675f"
+            main_color = self.TEXT_PRIMARY
 
-        text = self.info_font.render(result_text, True, (255, 255, 255))
-        text_rect = text.get_rect(center=(self.width // 2, self.height // 2))
-        self.screen.blit(text, text_rect)
+        # 背景卡片
+        card_w, card_h = 400, 140
+        card_surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+        pygame.draw.rect(card_surf, (50, 48, 45, 230), (0, 0, card_w, card_h),
+                         border_radius=16)
+        pygame.draw.rect(card_surf, (100, 96, 92), (0, 0, card_w, card_h),
+                         width=2, border_radius=16)
+        self.screen.blit(card_surf, ((self.width - card_w) // 2, cy - card_h // 2))
 
-        # 显示提示
-        hint_text = self.small_font.render("关闭窗口退出", True, (200, 200, 200))
-        hint_rect = hint_text.get_rect(center=(self.width // 2, self.height // 2 + 50))
-        self.screen.blit(hint_text, hint_rect)
+        txt = self.title_font.render(main_text, True, main_color)
+        self.screen.blit(txt, txt.get_rect(center=(self.width // 2, cy - 15)))
+
+        hint = self.small_font.render(
+            "\u5173\u95ed\u7a97\u53e3\u9000\u51fa", True, self.TEXT_SECONDARY)
+        self.screen.blit(hint, hint.get_rect(center=(self.width // 2, cy + 35)))
 
     def _draw_ai_thinking(self):
-        """绘制AI思考提示"""
-        text = self.info_font.render("AI思考中...", True, (100, 100, 255))
-        text_rect = text.get_rect(center=(self.width // 2, self.height // 2))
+        """绘制AI思考动画"""
+        cy = self.height // 2
 
-        # 半透明背景
-        bg = pygame.Surface((text_rect.width + 40, text_rect.height + 20))
-        bg.set_alpha(200)
-        bg.fill((255, 255, 255))
-        bg_rect = bg.get_rect(center=(self.width // 2, self.height // 2))
-        self.screen.blit(bg, bg_rect)
+        # 半透明遮罩
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 80))
+        self.screen.blit(overlay, (0, 0))
 
-        self.screen.blit(text, text_rect)
+        # 动画卡片
+        card_w, card_h = 260, 70
+        card_surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+        pygame.draw.rect(card_surf, (50, 48, 45, 220), (0, 0, card_w, card_h),
+                         border_radius=12)
+        pygame.draw.rect(card_surf, (80, 180, 100, 180), (0, 0, card_w, card_h),
+                         width=2, border_radius=12)
+        self.screen.blit(card_surf, ((self.width - card_w) // 2, cy - card_h // 2))
+
+        # 跳动的点动画
+        base_text = "AI \u601d\u8003\u4e2d"
+        dots_count = (self.think_anim_frame // 10) % 4
+        text = base_text + "." * dots_count
+
+        txt = self.info_font.render(text, True, self.TEXT_ACCENT)
+        self.screen.blit(txt, txt.get_rect(center=(self.width // 2, cy)))
